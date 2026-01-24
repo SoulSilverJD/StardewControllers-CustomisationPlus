@@ -1,4 +1,5 @@
-﻿using System.Runtime.CompilerServices;
+﻿using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Microsoft.Xna.Framework.Graphics;
 using StardewValley.Enchantments;
@@ -76,7 +77,19 @@ internal class InventoryMenuItem : IRadialMenuItem
         DelayedActions delayedActions,
         ItemActivationType activationType
     )
-    {
+    { // Item Bags: open bag UI from Primary (wheel) and Instant actions.
+        if (
+            Item is Tool bagTool
+            && (
+                activationType == ItemActivationType.Primary
+                || activationType == ItemActivationType.Instant
+            )
+            && TryOpenItemBagsMenu(bagTool)
+        )
+        {
+            return ItemActivationResult.Used;
+        }
+
         if (activationType == ItemActivationType.Instant)
         {
             if (Item is Tool tool)
@@ -337,5 +350,61 @@ internal class InventoryMenuItem : IRadialMenuItem
             sb.Length--;
         }
         return sb.ToString();
+    }
+
+    // Cache reflection lookups (don’t re-scan assemblies every press)
+    private static Type? _itemBagsBaseType;
+    private static MethodInfo? _openContentsMethod;
+
+    private static bool TryOpenItemBagsMenu(Tool tool)
+    {
+        try
+        {
+            _itemBagsBaseType ??= AppDomain
+                .CurrentDomain.GetAssemblies()
+                .Select(a => a.GetType("ItemBags.Bags.ItemBag", throwOnError: false))
+                .FirstOrDefault(t => t is not null);
+
+            if (_itemBagsBaseType is null)
+                return false;
+
+            if (!_itemBagsBaseType.IsInstanceOfType(tool))
+                return false;
+
+            var player = Game1.player;
+            if (player is null || player.CursorSlotItem is not null)
+                return false;
+
+            _openContentsMethod ??= _itemBagsBaseType.GetMethod(
+                "OpenContents",
+                BindingFlags.Public | BindingFlags.Instance
+            );
+
+            if (_openContentsMethod is null)
+                return false;
+
+            var parameters = _openContentsMethod.GetParameters();
+
+            if (parameters.Length == 0)
+            {
+                _openContentsMethod.Invoke(tool, null);
+                return true;
+            }
+
+            if (parameters.Length == 3)
+            {
+                _openContentsMethod.Invoke(
+                    tool,
+                    new object?[] { player.Items, player.MaxItems, null }
+                );
+                return true;
+            }
+
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
